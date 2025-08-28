@@ -1,0 +1,26 @@
+[Unit]
+Description=WiFi Network Scanner
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/path/to/your/scanner/directory
+Environment=PATH=/path/to/your/scanner/directory/venv/bin
+ExecStart=/path/to/your/scanner/directory/venv/bin/python3 /path/to/your/scanner/directory/wifi_scanner.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/path/to/your/scanner/directory
+
+[Install]
+WantedBy=multi-user.target
