@@ -134,6 +134,7 @@ class WiFiScanner:
                         self.clients[client_mac]['probed_ssids'].add(ssid)
                     self.clients[client_mac]['last_seen'] = current_time.isoformat()
                     self.clients[client_mac]['signal_strength'] = signal_strength
+                    self.clients[client_mac]['packet_count'] += 1
 
 
             elif packet.haslayer(Dot11Beacon):

@@ -95,6 +95,45 @@
             border-radius: 8px; pointer-events: none;
             opacity: 0; color: #0f0;
         }
+        .name-input-dialog {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: #000; border: 2px solid #0f0;
+            border-radius: 10px; padding: 20px;
+            z-index: 2000; display: none;
+            font-family: 'Monaco', 'Courier New', monospace;
+            color: #0f0; text-align: center;
+        }
+        .name-input-dialog h3 {
+            margin-bottom: 15px; color: #fff;
+            text-shadow: 0 0 5px #0f0;
+        }
+        .name-input-dialog input {
+            width: 250px; padding: 8px;
+            border: 1px solid #0f0; border-radius: 5px;
+            background: rgba(0, 0, 0, 0.8); color: #0f0;
+            font-family: 'Monaco', 'Courier New', monospace;
+            margin-bottom: 15px;
+        }
+        .name-input-dialog input:focus {
+            outline: none; box-shadow: 0 0 5px #0f0;
+        }
+        .name-input-dialog button {
+            margin: 0 5px; padding: 8px 15px;
+            border: 1px solid #0f0; border-radius: 5px;
+            background: #050; color: #0f0;
+            cursor: pointer; font-family: inherit;
+        }
+        .name-input-dialog button:hover {
+            background: #0f0; color: #000;
+        }
+        .name-input-dialog .cancel {
+            background: #500; border-color: #f00;
+            color: #f00;
+        }
+        .name-input-dialog .cancel:hover {
+            background: #f00; color: #000;
+        }
         .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 24px; }
@@ -147,6 +186,58 @@
             background: #0f0;
             cursor: pointer;
         }
+        .fade-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            pointer-events: none;
+            z-index: 500;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        .fade-overlay.active {
+            opacity: 1;
+        }
+        .fade-btn {
+            background: #660 !important;
+        }
+        .fade-btn:hover {
+            background: #ff0 !important;
+            color: #000 !important;
+        }
+        .fade-btn.active {
+            background: #f80 !important;
+        }
+        .fade-toggle {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1001;
+            padding: 15px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border: 2px solid #0f0;
+            border-radius: 8px;
+            background: #660;
+            color: #0f0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-shadow: 0 0 5px #0f0;
+        }
+        .fade-toggle:hover {
+            background: #ff0;
+            color: #000;
+            text-shadow: none;
+        }
+        .fade-toggle.active {
+            background: #f80;
+            border-color: #f80;
+            color: #000;
+            text-shadow: none;
+        }
     </style>
 </head>
 <body>
@@ -191,6 +282,16 @@
         <div class="legend-item"><div class="legend-color" style="background: #050;"></div><span>Multicast/Broadcast</span></div>
     </div>
     <div class="tooltip"></div>
+    <div class="name-input-dialog" id="nameInputDialog">
+        <h3>Add Custom Name</h3>
+        <div id="nodeInfo"></div>
+        <input type="text" id="nodeNameInput" placeholder="Enter custom name..." maxlength="50">
+        <br>
+        <button onclick="saveNodeName()">Save</button>
+        <button class="cancel" onclick="cancelNameInput()">Cancel</button>
+    </div>
+    <button id="fadeBtn" class="fade-toggle">FADE</button>
+    <div class="fade-overlay" id="fadeOverlay"></div>
     <svg class="network-canvas" id="networkCanvas"></svg>
 
     <script>
@@ -201,6 +302,8 @@
         const width = window.innerWidth;
         const height = window.innerHeight;
         const nodeMap = new Map();
+        const nodeNames = new Map();
+        let currentNamingNode = null;
 
         const svg = d3.select('#networkCanvas').attr('width', width).attr('height', height);
         svg.on("click", () => {
@@ -261,13 +364,18 @@
             document.getElementById('apCount').textContent = data.access_points.length;
             document.getElementById('clientCount').textContent = data.clients.filter(c => c.type !== 'multicast').length;
             document.getElementById('connectionCount').textContent = allLinks.length;
-            document.getElementById('packetCount').textContent = allLinks.reduce((sum, conn) => sum + conn.packet_count, 0);
+            const clientPackets = data.clients.reduce((sum, client) => sum + (client.packet_count || 0), 0);
+            const apPackets = data.access_points.reduce((sum, ap) => sum + (ap.packet_count || 0), 0);
+            document.getElementById('packetCount').textContent = clientPackets + apPackets;
 
             const allNodesData = data.access_points.map(ap => {
-                return {...ap, id: ap.bssid, type: 'ap', displayLabel: `${ap.ssid || 'Unknown'}\n${ap.bssid}`};
+                const customName = nodeNames.get(ap.bssid);
+                let displayLabel = customName ? `${customName}\n${ap.ssid || 'Unknown'}\n${ap.bssid}` : `${ap.ssid || 'Unknown'}\n${ap.bssid}`;
+                return {...ap, id: ap.bssid, type: 'ap', displayLabel: displayLabel, customName: customName};
             }).concat(data.clients.map(c => {
-                let label = (c.label || 'Client') + `\n${c.mac}`;
-                return {...c, id: c.mac, type: c.type || 'client', displayLabel: label};
+                const customName = nodeNames.get(c.mac);
+                let label = customName ? `${customName}\n${c.label || 'Client'}\n${c.mac}` : `${c.label || 'Client'}\n${c.mac}`;
+                return {...c, id: c.mac, type: c.type || 'client', displayLabel: label, customName: customName};
             }));
 
             allNodesData.forEach(n => {
@@ -373,9 +481,19 @@
 
             node.on("click", (event, d) => {
                 event.stopPropagation();
-                if (d.type === 'ap') {
+                if (event.button === 1) {
+                    showNameInputDialog(d);
+                } else if (d.type === 'ap') {
                     isolatedNodeId = (isolatedNodeId === d.id) ? null : d.id;
                     updateNetwork(lastData);
+                }
+            });
+            
+            node.on("mousedown", (event, d) => {
+                if (event.button === 1) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showNameInputDialog(d);
                 }
             });
 
@@ -463,15 +581,82 @@
             socket.on('status', data => document.getElementById('status').textContent = data.message);
             document.getElementById('startBtn').addEventListener('click', startScan);
             document.getElementById('stopBtn').addEventListener('click', stopScan);
+            document.getElementById('fadeBtn').addEventListener('click', toggleFade);
             document.getElementById('ghostModeToggle').addEventListener('change', updateSettings);
             document.getElementById('multicastFilterToggle').addEventListener('change', updateSettings);
 
             const persistenceSlider = document.getElementById('persistenceSlider');
             const persistenceValue = document.getElementById('persistenceValue');
+            // Ensure slider is set to default value
+            persistenceSlider.value = 1;
+            persistenceValue.textContent = 1;
             persistenceSlider.addEventListener('input', () => {
                 persistenceValue.textContent = persistenceSlider.value;
             });
             persistenceSlider.addEventListener('change', updateSettings);
+        });
+        
+        function toggleFade() {
+            const overlay = document.getElementById('fadeOverlay');
+            const btn = document.getElementById('fadeBtn');
+            
+            if (overlay.classList.contains('active')) {
+                overlay.classList.remove('active');
+                btn.classList.remove('active');
+            } else {
+                overlay.classList.add('active');
+                btn.classList.add('active');
+            }
+        }
+        
+        function showNameInputDialog(node) {
+            currentNamingNode = node;
+            const dialog = document.getElementById('nameInputDialog');
+            const nodeInfo = document.getElementById('nodeInfo');
+            const nameInput = document.getElementById('nodeNameInput');
+            
+            if (node.type === 'ap') {
+                nodeInfo.innerHTML = `<strong>Access Point</strong><br/>SSID: ${node.ssid || 'Unknown'}<br/>BSSID: ${node.bssid}`;
+            } else {
+                nodeInfo.innerHTML = `<strong>${node.label || 'Client'}</strong><br/>MAC: ${node.mac}`;
+            }
+            
+            nameInput.value = node.customName || '';
+            dialog.style.display = 'block';
+            nameInput.focus();
+            nameInput.select();
+        }
+        
+        function saveNodeName() {
+            const nameInput = document.getElementById('nodeNameInput');
+            const customName = nameInput.value.trim();
+            
+            if (currentNamingNode) {
+                if (customName) {
+                    nodeNames.set(currentNamingNode.id, customName);
+                } else {
+                    nodeNames.delete(currentNamingNode.id);
+                }
+                updateNetwork(lastData);
+            }
+            
+            cancelNameInput();
+        }
+        
+        function cancelNameInput() {
+            document.getElementById('nameInputDialog').style.display = 'none';
+            currentNamingNode = null;
+        }
+        
+        document.addEventListener('keydown', (event) => {
+            const dialog = document.getElementById('nameInputDialog');
+            if (dialog.style.display === 'block') {
+                if (event.key === 'Enter') {
+                    saveNodeName();
+                } else if (event.key === 'Escape') {
+                    cancelNameInput();
+                }
+            }
         });
     </script>
 </body>
