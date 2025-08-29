@@ -306,7 +306,8 @@ class WiFiScanner:
             
             new_conn = conn.copy()
             # Scale thickness based on total bytes in the window
-            new_conn['thickness'] = min(12, max(1, total_bytes / 75000))
+            # MODIFIED: Changed denominator from 75000 to 25000
+            new_conn['thickness'] = min(12, max(1, total_bytes / 10000))
             connections_with_thickness.append(new_conn)
         
         return {
@@ -314,7 +315,6 @@ class WiFiScanner:
             'clients': clients_list,
             'connections': connections_with_thickness
         }
-
 
 scanner = WiFiScanner()
 

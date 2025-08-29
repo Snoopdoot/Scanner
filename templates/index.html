@@ -365,7 +365,7 @@
                     }
                     tooltip.html(tooltip_html)
                         .style("left", (event.pageX + 5) + "px")
-                        .style("top", (event.pageY - 28) + "px");
+                        .style("top", (event.pageY - 40) + "px"); // Changed from -28 to -40 to place tooltip on top
                 })
                 .on("mouseout", () => {
                     tooltip.transition().duration(500).style("opacity", 0);
