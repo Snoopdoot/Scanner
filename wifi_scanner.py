@@ -27,74 +27,92 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'wifi_scanner_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Dictionary of known multicast MAC addresses and their labels
+KNOWN_MULTICAST_MACS = {
+    "ff:ff:ff:ff:ff:ff": "Broadcast",
+    "01:80:c2:00:00:00": "Spanning Tree (STP)",
+    "01:00:0c:cc:cc:cc": "Cisco Discovery (CDP)",
+    "01:80:c2:00:00:0e": "Link Layer Discovery (LLDP)",
+    "01:00:5e": "IPv4 Multicast",
+    "33:33": "IPv6 Multicast"
+}
+
+
 class WiFiScanner:
     def __init__(self):
         self.access_points = {}  # BSSID -> AP info
         self.clients = {}        # MAC -> Client info
         self.connections = {}    # (AP_BSSID, CLIENT_MAC) -> connection info
-        self.packet_counts = defaultdict(int)  # Track packet counts for line thickness
-        self.last_seen = {}      # Track last seen times
+        # --- MODIFIED: Use a deque to store (timestamp, size) tuples for the sliding window ---
+        self.connection_traffic = defaultdict(deque)
         self.scanning = False
         self.interface = None
         self.monitor_interface = None
         self.ghost_mode = True
         self.filter_multicast = True
         self.persistence_minutes = 1 # Default persistence
-        
+
     def find_wifi_interfaces(self):
         """Find available WiFi interfaces"""
         interfaces = []
         try:
             all_interfaces = netifaces.interfaces()
-            print(f"All network interfaces: {all_interfaces}")
-            
             for iface in all_interfaces:
                 if iface.startswith('wlan') or iface.startswith('wifi'):
                     if not iface.endswith('mon') and not self._is_interface_in_monitor_mode(iface):
                         interfaces.append(iface)
-                        print(f"Found WiFi interface: {iface}")
-            
-            print(f"Total WiFi interfaces found: {len(interfaces)}")
             return interfaces
         except Exception as e:
             print(f"Error finding WiFi interfaces: {e}")
             return []
-    
+
     def _is_interface_in_monitor_mode(self, interface):
         """Check if an interface is in monitor mode"""
         try:
-            result = subprocess.run(['iw', 'dev', interface, 'info'], 
+            result = subprocess.run(['iw', 'dev', interface, 'info'],
                                   capture_output=True, text=True)
             return 'type monitor' in result.stdout.lower()
         except:
             return False
-    
+
     def put_interface_in_monitor_mode(self, interface):
         """Put WiFi interface in monitor mode"""
         try:
-            print(f"Attempting to put interface '{interface}' in monitor mode")
-            
             subprocess.run(['sudo', 'airmon-ng', 'check', 'kill'], capture_output=True, text=True)
             subprocess.run(['sudo', 'airmon-ng', 'stop', interface], capture_output=True, text=True)
             result = subprocess.run(['sudo', 'airmon-ng', 'start', interface], capture_output=True, text=True)
-            
+
             if result.returncode == 0:
                 current_interfaces = netifaces.interfaces()
                 monitor_interfaces = [iface for iface in current_interfaces if 'mon' in iface]
                 if monitor_interfaces:
                     self.monitor_interface = monitor_interfaces[0]
-                    print(f"Using monitor interface: {self.monitor_interface}")
                     return True
                 if self._is_interface_in_monitor_mode(interface):
                     self.monitor_interface = interface
                     return True
-                print("No monitor interface found")
                 return False
             return False
         except Exception as e:
             print(f"Error putting interface in monitor mode: {e}")
             return False
-    
+            
+    def is_multicast(self, mac):
+        """Check if a MAC address is a multicast address."""
+        if not mac or len(mac.split(':')) != 6:
+            return False
+        first_octet = int(mac.split(':')[0], 16)
+        return first_octet & 1
+
+    def get_multicast_label(self, mac):
+        """Get a descriptive label for a known multicast MAC address."""
+        if mac in KNOWN_MULTICAST_MACS:
+            return KNOWN_MULTICAST_MACS[mac]
+        for prefix, label in KNOWN_MULTICAST_MACS.items():
+            if mac.startswith(prefix):
+                return label
+        return "Multicast"
+
     def packet_handler(self, packet):
         """Handle captured WiFi packets"""
         try:
@@ -102,11 +120,25 @@ class WiFiScanner:
                 return
 
             current_time = datetime.now()
+            signal_strength = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100
+            packet_size = len(packet)
 
-            # Handle Access Points (Beacon frames) - Not subject to multicast filtering
-            if packet.haslayer(Dot11Beacon):
+            if packet.haslayer(Dot11ProbeReq):
+                client_mac = packet.addr2
+                if client_mac and not self.is_multicast(client_mac):
+                    if client_mac not in self.clients:
+                        self.clients[client_mac] = {'mac': client_mac, 'packet_count': 0, 'type': 'client', 'probed_ssids': set()}
+                    
+                    ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
+                    if ssid:
+                        self.clients[client_mac]['probed_ssids'].add(ssid)
+                    self.clients[client_mac]['last_seen'] = current_time.isoformat()
+                    self.clients[client_mac]['signal_strength'] = signal_strength
+
+
+            elif packet.haslayer(Dot11Beacon):
                 bssid = packet.addr3
-                if bssid and bssid != "ff:ff:ff:ff:ff:ff":
+                if bssid and not self.is_multicast(bssid):
                     ssid = ""
                     try:
                         if hasattr(packet[Dot11Elt], 'info'):
@@ -119,21 +151,19 @@ class WiFiScanner:
                         channel = int(ord(packet[Dot11Elt:3].info))
                     except Exception:
                         pass
-                    
+
                     if bssid not in self.access_points:
                         self.access_points[bssid] = {'bssid': bssid, 'packet_count': 0}
 
                     self.access_points[bssid].update({
                         'ssid': ssid,
                         'channel': channel,
-                        'signal_strength': packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100,
+                        'signal_strength': signal_strength,
                         'last_seen': current_time.isoformat(),
                         'packet_count': self.access_points[bssid].get('packet_count', 0) + 1,
                         'state': 'active'
                     })
-                    self.last_seen[bssid] = current_time
 
-            # Handle clients and connections using data frames
             elif packet.type == 2:
                 ds = packet.FCfield & 0x3
                 to_ds = ds & 0x1 != 0
@@ -148,145 +178,143 @@ class WiFiScanner:
                 else:
                     return
 
-                # Correctly apply the filter ONLY to the identified client MAC
-                if self.filter_multicast and (client_mac.startswith("33:33:") or client_mac == "ff:ff:ff:ff:ff:ff"):
+                is_multi = self.is_multicast(client_mac)
+
+                if self.filter_multicast and is_multi:
                     return
 
                 if ap_bssid in self.access_points and client_mac:
-                    is_broadcast = client_mac == "ff:ff:ff:ff:ff:ff"
-
-                    if client_mac in self.clients and self.clients[client_mac].get('bssid') != ap_bssid and not is_broadcast:
+                    if client_mac in self.clients and self.clients[client_mac].get('bssid') and self.clients[client_mac].get('bssid') != ap_bssid:
                         old_bssid = self.clients[client_mac].get('bssid')
                         if (old_bssid, client_mac) in self.connections:
                             del self.connections[(old_bssid, client_mac)]
 
                     if client_mac not in self.clients:
-                        client_type = "broadcast" if is_broadcast else "client"
-                        self.clients[client_mac] = {'mac': client_mac, 'packet_count': 0, 'type': client_type}
+                        client_type = "multicast" if is_multi else "client"
+                        self.clients[client_mac] = {'mac': client_mac, 'packet_count': 0, 'type': client_type, 'probed_ssids': set()}
+                        if is_multi:
+                            self.clients[client_mac]['label'] = self.get_multicast_label(client_mac)
                     
                     self.clients[client_mac]['last_seen'] = current_time.isoformat()
                     self.clients[client_mac]['packet_count'] += 1
                     self.clients[client_mac]['state'] = 'active'
-                    if not is_broadcast:
-                        self.clients[client_mac]['bssid'] = ap_bssid
-                    self.last_seen[client_mac] = current_time
+                    self.clients[client_mac]['bssid'] = ap_bssid
+                    self.clients[client_mac]['signal_strength'] = signal_strength
 
                     connection_key = (ap_bssid, client_mac)
                     if connection_key not in self.connections:
                         self.connections[connection_key] = {
                             'ap_bssid': ap_bssid,
                             'client_mac': client_mac,
-                            'packet_count': 0,
-                            'direction': 'unknown'
                         }
                     
-                    self.connections[connection_key]['packet_count'] += 1
                     self.connections[connection_key]['last_seen'] = current_time.isoformat()
-                    self.packet_counts[connection_key] += 1
-                    
-                    direction = 'client_to_ap' if to_ds else 'ap_to_client'
-                    if self.connections[connection_key]['direction'] not in ('bidirectional', direction):
-                        self.connections[connection_key]['direction'] = 'bidirectional' if self.connections[connection_key]['direction'] != 'unknown' else direction
-        except Exception as e:
+                    # --- MODIFIED: Add (timestamp, size) to the deque ---
+                    self.connection_traffic[connection_key].append((current_time, packet_size))
+
+        except Exception:
             pass
-    
+
     def cleanup_old_entries(self):
-        """Manage device states: active -> ghost -> removed"""
         now = datetime.now()
-        remove_time = now - timedelta(minutes=self.persistence_minutes)
-        ghost_time = remove_time + timedelta(seconds=30) # Ghost period is last 30s of persistence
+        remove_threshold = now - timedelta(minutes=self.persistence_minutes)
 
         for bssid, ap in list(self.access_points.items()):
             last_seen_dt = datetime.fromisoformat(ap['last_seen'])
-            if last_seen_dt < remove_time:
+            if last_seen_dt < remove_threshold:
                 del self.access_points[bssid]
-            elif self.ghost_mode and last_seen_dt < ghost_time:
-                self.access_points[bssid]['state'] = 'ghost'
-
+                continue
+            if self.ghost_mode:
+                ghost_threshold = now - timedelta(seconds=60)
+                ap['state'] = 'ghost' if last_seen_dt < ghost_threshold else 'active'
+            else:
+                ap['state'] = 'active'
+        
         for mac, client in list(self.clients.items()):
             last_seen_dt = datetime.fromisoformat(client['last_seen'])
-            if last_seen_dt < remove_time:
-                del self.clients[mac]
-            elif self.ghost_mode and last_seen_dt < ghost_time:
-                self.clients[mac]['state'] = 'ghost'
+            if last_seen_dt < remove_threshold:
+                if mac in self.clients:
+                    del self.clients[mac]
+                continue
+            if self.ghost_mode:
+                ghost_threshold = now - timedelta(seconds=60)
+                client['state'] = 'ghost' if last_seen_dt < ghost_threshold else 'active'
+            else:
+                client['state'] = 'active'
 
         self.connections = {k: v for k, v in self.connections.items() if k[0] in self.access_points and k[1] in self.clients}
 
     def start_scanning(self, interface):
-        """Start WiFi scanning on specified interface"""
         self.interface = interface
         if not self.put_interface_in_monitor_mode(interface):
             return False
-        
         self.scanning = True
-        
-        def scan_thread():
-            try:
-                sniff(iface=self.monitor_interface, prn=self.packet_handler, store=0, stop_filter=lambda x: not self.scanning)
-            except Exception as e:
-                print(f"Error in scanning thread: {e}")
-                self.scanning = False
-        
-        def channel_hopper_thread():
-            # Expanded 2.4GHz and 5GHz channels
-            channels = [1, 6, 11, 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165]
-            while self.scanning:
-                for channel in channels:
-                    if not self.scanning:
-                        break
-                    try:
-                        subprocess.run(['sudo', 'iwconfig', self.monitor_interface, 'channel', str(channel)],
-                                     capture_output=True, text=True)
-                        time.sleep(0.5)
-                    except Exception as e:
-                        print(f"Error hopping channels: {e}")
-                        break
-
-        def cleanup_thread():
-            while self.scanning:
-                self.cleanup_old_entries()
-                time.sleep(10)
-        
-        threading.Thread(target=scan_thread, daemon=True).start()
-        threading.Thread(target=channel_hopper_thread, daemon=True).start()
-        threading.Thread(target=cleanup_thread, daemon=True).start()
+        threading.Thread(target=lambda: sniff(iface=self.monitor_interface, prn=self.packet_handler, store=0, stop_filter=lambda x: not self.scanning), daemon=True).start()
+        threading.Thread(target=self.channel_hopper, daemon=True).start()
+        threading.Thread(target=self.cleanup_thread, daemon=True).start()
         return True
-    
+
+    def channel_hopper(self):
+        channels = [1, 6, 11, 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165]
+        while self.scanning:
+            for channel in channels:
+                if not self.scanning: break
+                try:
+                    subprocess.run(['sudo', 'iwconfig', self.monitor_interface, 'channel', str(channel)], capture_output=True, text=True)
+                    time.sleep(0.5)
+                except Exception: break
+
+    def cleanup_thread(self):
+        while self.scanning:
+            self.cleanup_old_entries()
+            time.sleep(10)
+
     def stop_scanning(self):
-        """Stop WiFi scanning"""
         self.scanning = False
         if self.monitor_interface:
             try:
-                subprocess.run(['sudo', 'airmon-ng', 'stop', self.monitor_interface], 
-                             capture_output=True, text=True)
-            except:
-                pass
+                subprocess.run(['sudo', 'airmon-ng', 'stop', self.monitor_interface], capture_output=True, text=True)
+            except: pass
         self.monitor_interface = None
-    
+
     def get_network_data(self):
-        """Get current network data for web interface"""
+        clients_to_send = {mac: client for mac, client in self.clients.items() if not (self.filter_multicast and self.is_multicast(mac))}
         
-        # Dynamically filter clients if the toggle is on
-        clients_to_send = self.clients.copy()
-        if self.filter_multicast:
-            clients_to_send = {mac: client for mac, client in clients_to_send.items() if not (mac.startswith("33:33:") or mac == "ff:ff:ff:ff:ff:ff")}
+        clients_list = []
+        for mac, client_data in clients_to_send.items():
+            client_copy = client_data.copy()
+            if 'probed_ssids' in client_copy:
+                client_copy['probed_ssids'] = list(client_copy['probed_ssids'])
+            clients_list.append(client_copy)
 
-        connections_to_send = {k: v for k, v in self.connections.items() if k[1] in clients_to_send}
-
-
+        connections_to_send = {k: v for k, v in self.connections.items() if k[0] in self.access_points and k[1] in clients_to_send}
         connections_with_thickness = []
-        for conn in connections_to_send.values():
-            new_conn = conn.copy()
-            packet_count = new_conn.get('packet_count', 0)
-            thickness = min(10, max(1, packet_count // 10))
-            new_conn['thickness'] = thickness
-            connections_with_thickness.append(new_conn)
+        
+        now = datetime.now()
+        # --- MODIFIED: Use a longer, more stable time window ---
+        time_window = timedelta(seconds=15)
 
+        for key, conn in connections_to_send.items():
+            traffic_deque = self.connection_traffic[key]
+            
+            # Remove old packets from the window
+            while traffic_deque and traffic_deque[0][0] < now - time_window:
+                traffic_deque.popleft()
+
+            # Calculate total bytes in the current window
+            total_bytes = sum(size for timestamp, size in traffic_deque)
+            
+            new_conn = conn.copy()
+            # Scale thickness based on total bytes in the window
+            new_conn['thickness'] = min(12, max(1, total_bytes / 75000))
+            connections_with_thickness.append(new_conn)
+        
         return {
             'access_points': list(self.access_points.values()),
-            'clients': list(clients_to_send.values()),
+            'clients': clients_list,
             'connections': connections_with_thickness
         }
+
 
 scanner = WiFiScanner()
 
@@ -296,20 +324,16 @@ def index():
 
 @app.route('/api/interfaces')
 def get_interfaces():
-    interfaces = scanner.find_wifi_interfaces()
-    return jsonify({'interfaces': interfaces})
+    return jsonify({'interfaces': scanner.find_wifi_interfaces()})
 
 @app.route('/api/start_scan', methods=['POST'])
 def start_scan():
     interface = request.json.get('interface')
-    if not interface:
-        return jsonify({'error': 'No interface specified'}), 400
-    if scanner.scanning:
-        return jsonify({'error': 'Already scanning'}), 400
+    if not interface or scanner.scanning:
+        return jsonify({'error': 'Invalid request'}), 400
     if scanner.start_scanning(interface):
         return jsonify({'message': f'Started scanning on {interface}'})
-    else:
-        return jsonify({'error': f'Failed to start scanning on {interface}'}), 500
+    return jsonify({'error': f'Failed to start scanning on {interface}'}), 500
 
 @app.route('/api/stop_scan', methods=['POST'])
 def stop_scan():
@@ -327,11 +351,9 @@ def handle_settings_update(data):
     scanner.persistence_minutes = data.get('persistence', 1)
 
 def broadcast_updates():
-    """Broadcast network updates to connected clients"""
     while True:
         if scanner.scanning:
-            data = scanner.get_network_data()
-            socketio.emit('network_update', data)
+            socketio.emit('network_update', scanner.get_network_data())
         time.sleep(2)
 
 if __name__ == '__main__':
