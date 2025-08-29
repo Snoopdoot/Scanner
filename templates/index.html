@@ -8,45 +8,119 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; overflow: hidden; }
-        .header { position: fixed; top: 0; left: 0; right: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(10px); padding: 15px 20px; z-index: 1000; display: flex; justify-content: space-between; align-items: center; }
+        body { 
+            font-family: 'Monaco', 'Courier New', monospace; 
+            background: #000; 
+            color: #0f0; 
+            overflow: hidden; 
+        }
+        .header { 
+            position: fixed; top: 0; left: 0; right: 0; 
+            background: rgba(0, 15, 0, 0.8); 
+            backdrop-filter: blur(10px); 
+            padding: 15px 20px; 
+            z-index: 1000; 
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #0f0;
+            text-shadow: 0 0 5px #0f0;
+        }
         .title { font-size: 24px; font-weight: bold; }
         .controls { display: flex; gap: 15px; align-items: center; }
-        select, button { padding: 8px 12px; border: none; border-radius: 5px; background: rgba(255, 255, 255, 0.1); color: white; cursor: pointer; transition: all 0.3s ease; }
-        select:hover, button:hover { background: rgba(255, 255, 255, 0.2); }
-        button { background: #4CAF50; }
-        button:hover { background: #45a049; }
-        button.stop { background: #f44336; }
-        button.stop:hover { background: #da190b; }
+        select, button { 
+            padding: 8px 12px; 
+            border: 1px solid #0f0; 
+            border-radius: 5px; 
+            background: rgba(0, 0, 0, 0.5); 
+            color: #0f0; 
+            cursor: pointer; 
+            transition: all 0.3s ease; 
+        }
+        select:hover, button:hover { background: #0f0; color: #000; }
+        button { background: #050; }
+        button:hover { background: #0f0; color: #000; }
+        button.stop { background: #500; }
+        button.stop:hover { background: #f00; color: #000; }
         .status { font-size: 14px; opacity: 0.8; }
-        .stats { position: fixed; top: 80px; right: 20px; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(10px); padding: 15px; border-radius: 10px; z-index: 999; min-width: 200px; }
-        .stats h3 { margin-bottom: 10px; font-size: 16px; }
+        .stats { 
+            position: fixed; top: 80px; right: 20px; 
+            background: rgba(0, 15, 0, 0.8); 
+            backdrop-filter: blur(10px); 
+            padding: 15px; border-radius: 10px; 
+            z-index: 999; min-width: 200px; 
+            border: 1px solid #0f0;
+        }
+        .stats h3 { margin-bottom: 10px; font-size: 16px; text-shadow: 0 0 5px #0f0; }
         .stat-item { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; }
         .network-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
-        .node { cursor: pointer; }
-        .node.ap circle { fill: #ff6b6b; stroke: #ff5252; }
-        .node.client circle { fill: #4ecdc4; stroke: #26a69a; }
+        .node { cursor: pointer; transition: opacity 0.5s ease-in-out; }
+        .node.ghost { opacity: 0.3; }
+        .node.ap circle { fill: #0f0; stroke: #fff; }
+        .node.client circle { fill: #0a0; stroke: #0c0; }
+        .node.broadcast circle { fill: #050; stroke: #080; }
         .node text {
             pointer-events: none;
-            font-family: sans-serif;
-            fill: white;
-            paint-order: stroke;
-            stroke: #222;
-            stroke-width: 2px;
-            stroke-linecap: butt;
-            stroke-linejoin: miter;
+            font-family: 'Monaco', 'Courier New', monospace;
+            fill: #0f0;
+            text-shadow: 0 0 5px #0f0, 0 0 10px #0f0;
         }
-        .link { stroke: #ffffff; stroke-opacity: 0.6; stroke-linecap: round; }
-        .legend { position: fixed; bottom: 20px; left: 20px; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(10px); padding: 15px; border-radius: 10px; z-index: 999; }
-        .legend h3 { margin-bottom: 10px; font-size: 16px; }
+        .node.ap text {
+            fill: #fff;
+            font-weight: bold;
+        }
+        .link { stroke: #0f0; stroke-opacity: 0.6; stroke-linecap: round; fill: none; }
+        .legend { 
+            position: fixed; bottom: 20px; left: 20px; 
+            background: rgba(0, 15, 0, 0.8); 
+            backdrop-filter: blur(10px); 
+            padding: 15px; border-radius: 10px; 
+            z-index: 999; 
+            border: 1px solid #0f0;
+        }
+        .legend h3 { margin-bottom: 10px; font-size: 16px; text-shadow: 0 0 5px #0f0; }
         .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
-        .legend-color { width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; }
+        .legend-color { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #0f0; }
+        .tooltip {
+            position: absolute; text-align: center;
+            width: auto; height: auto;
+            padding: 8px; font: 12px 'Monaco', 'Courier New', monospace;
+            background: #000; border: 1px solid #0f0;
+            border-radius: 8px; pointer-events: none;
+            opacity: 0; color: #0f0;
+        }
+        .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: #0f0; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0f0; }
+        input:checked + .slider:before { background-color: #000; transform: translateX(26px); }
+        .toggle-label, .slider-label { display: flex; align-items: center; gap: 10px; }
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track { height: 5px; background: #050; border: 1px solid #0f0; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 10px; background: #0f0; margin-top: -8px; }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="title">WiFi Network Scanner</div>
         <div class="controls">
+            <div class="slider-label">
+                <span>Persistence: <span id="persistenceValue">1</span> min</span>
+                <input type="range" min="1" max="60" value="1" id="persistenceSlider">
+            </div>
+            <div class="toggle-label">
+                <span>Ghost Mode</span>
+                <label class="switch">
+                    <input type="checkbox" id="ghostModeToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="toggle-label">
+                <span>Filter Multicast</span>
+                <label class="switch">
+                    <input type="checkbox" id="multicastFilterToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
             <select id="interfaceSelect"><option value="">Select Interface</option></select>
             <button id="startBtn">Start Scan</button>
             <button id="stopBtn" class="stop" style="display: none;">Stop Scan</button>
@@ -62,9 +136,11 @@
     </div>
     <div class="legend">
         <h3>Legend</h3>
-        <div class="legend-item"><div class="legend-color" style="background: #ff6b6b;"></div><span>Access Points</span></div>
-        <div class="legend-item"><div class="legend-color" style="background: #4ecdc4;"></div><span>Clients</span></div>
+        <div class="legend-item"><div class="legend-color" style="background: #0f0;"></div><span>Access Points</span></div>
+        <div class="legend-item"><div class="legend-color" style="background: #0a0;"></div><span>Clients</span></div>
+        <div class="legend-item"><div class="legend-color" style="background: #050;"></div><span>Broadcast</span></div>
     </div>
+    <div class="tooltip"></div>
     <svg class="network-canvas" id="networkCanvas"></svg>
 
     <script>
@@ -74,72 +150,119 @@
         let links = [];
         const width = window.innerWidth;
         const height = window.innerHeight;
-        
+
         const svg = d3.select('#networkCanvas').attr('width', width).attr('height', height);
         const g = svg.append('g');
-        let link = g.append("g").attr("stroke-opacity", 0.6).selectAll("line");
+        let link = g.append("g").attr("stroke-opacity", 0.6).selectAll("path");
         let node = g.append("g").selectAll("g");
         
+        const tooltip = d3.select(".tooltip");
+
         const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (event) => {
             g.attr('transform', event.transform);
-            // Adjust label font size to counteract the zoom effect
             const k = event.transform.k;
-            g.selectAll('.node text').attr('font-size', 12 / k);
-            g.selectAll('.node circle').attr('stroke-width', 1.5 / k);
+            g.selectAll('.node text').attr('font-size', 14 / k);
+            g.selectAll('.node circle').attr('stroke-width', 2 / k);
         });
 
         svg.call(zoom);
 
         function ticked() {
-            link
-                .attr("x1", d => d.source.x)
-                .attr("y1", d => d.source.y)
-                .attr("x2", d => d.target.x)
-                .attr("y2", d => d.target.y);
+            link.attr("d", d => {
+                const dx = d.target.x - d.source.x;
+                const dy = d.target.y - d.source.y;
+                const dr = Math.sqrt(dx * dx + dy * dy);
+                return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+            });
             node.attr("transform", d => `translate(${d.x},${d.y})`);
         }
-        
+
         simulation = d3.forceSimulation()
-            .force("link", d3.forceLink().id(d => d.id).distance(120))
-            .force("charge", d3.forceManyBody().strength(-500))
-            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("link", d3.forceLink().id(d => d.id).distance(150).strength(1))
+            .force("charge", d3.forceManyBody().strength(-1500))
+            .force("center", d3.forceCenter(width / 2, height / 2).strength(1))
+            .force("collide", d3.forceCollide().radius(d => (d.type === 'ap' ? 60 : 35)).strength(1))
+            .force("x", d3.forceX(width / 2).strength(0.15))
+            .force("y", d3.forceY(height / 2).strength(0.15))
             .on("tick", ticked);
 
         function updateNetwork(data) {
             document.getElementById('apCount').textContent = data.access_points.length;
-            document.getElementById('clientCount').textContent = data.clients.length;
+            document.getElementById('clientCount').textContent = data.clients.filter(c => c.type !== 'broadcast').length;
             document.getElementById('connectionCount').textContent = data.connections.length;
             document.getElementById('packetCount').textContent = data.connections.reduce((sum, conn) => sum + conn.packet_count, 0);
 
             const oldNodes = new Map(node.data().map(d => [d.id, d]));
-            nodes = data.access_points.map(ap => ({...ap, id: ap.bssid, type: 'ap', label: ap.ssid || 'Unknown'}))
-                  .concat(data.clients.map(c => ({...c, id: c.mac, type: 'client', label: `Client ${c.mac.slice(-6)}`})));
-            nodes = nodes.map(d => Object.assign(oldNodes.get(d.id) || {}, d));
             
+            nodes = data.access_points.map(ap => ({...ap, id: ap.bssid, type: 'ap', label: `${ap.ssid || 'Unknown'}\n${ap.bssid}`}))
+                  .concat(data.clients.map(c => {
+                      let label = `Client\n${c.mac}`;
+                      if (c.type === 'broadcast') {
+                          label = `Broadcast\n${c.mac}`;
+                      }
+                      return {...c, id: c.mac, type: c.type || 'client', label: label};
+                  }));
+            
+            nodes.forEach(n => {
+                const oldNode = oldNodes.get(n.id);
+                if (oldNode) {
+                    n.x = oldNode.x;
+                    n.y = oldNode.y;
+                    n.vx = oldNode.vx;
+                    n.vy = oldNode.vy;
+                }
+            });
+
             links = data.connections.map(d => ({...d, source: d.ap_bssid, target: d.client_mac}));
 
             node = node.data(nodes, d => d.id).join(
                 enter => {
-                    const g = enter.append("g").attr("class", d => `node ${d.type}`).call(drag(simulation));
-                    g.append("circle").attr("r", d => d.type === 'ap' ? 15 : 10);
+                    const g = enter.append("g").attr("class", d => `node ${d.type} ${d.state === 'ghost' ? 'ghost' : ''}`).call(drag(simulation));
+                    g.append("circle").attr("r", d => d.type === 'ap' ? 30 : 20);
                     g.append("text")
-                     .attr("y", -20)
+                     .attr("y", -35)
                      .attr("text-anchor", "middle")
-                     .attr("font-size", "12") // Initial font size
-                     .text(d => d.label.substring(0, 16));
+                     .attr("font-size", "14")
+                     .selectAll("tspan")
+                     .data(d => d.label.split('\n'))
+                     .enter().append("tspan")
+                     .attr("x", 0)
+                     .attr("dy", (d, i) => i > 0 ? "1.2em" : 0)
+                     .text(d => d);
+                     
+                    g.on("mouseover", (event, d) => {
+                        tooltip.transition().duration(200).style("opacity", .9);
+                        let tooltip_html = `<strong>${d.type.charAt(0).toUpperCase() + d.type.slice(1)}</strong><br/>`;
+                        if (d.type === 'ap') {
+                            tooltip_html += `SSID: ${d.ssid}<br/>BSSID: ${d.bssid}<br/>Channel: ${d.channel}<br/>Signal: ${d.signal_strength} dBm`;
+                        } else {
+                            tooltip_html += `MAC: ${d.mac}`;
+                        }
+                        tooltip.html(tooltip_html)
+                            .style("left", (event.pageX + 5) + "px")
+                            .style("top", (event.pageY - 28) + "px");
+                    })
+                    .on("mouseout", (d) => {
+                        tooltip.transition().duration(500).style("opacity", 0);
+                    });
+
                     return g;
+                },
+                update => {
+                    update.attr("class", d => `node ${d.type} ${d.state === 'ghost' ? 'ghost' : ''}`);
+                    return update;
                 }
             );
-            
-            link = link.data(links, d => `${d.source.id}-${d.target.id}`).join("line")
+
+            link = link.data(links, d => `${d.source.id}-${d.target.id}`).join("path")
                 .attr("class", "link")
-                .attr("stroke-width", d => Math.min(10, Math.max(1, d.thickness / 2)));
+                .attr("stroke-width", d => Math.min(12, Math.max(1.5, d.thickness / 1.5)));
 
             simulation.nodes(nodes);
             simulation.force("link").links(links);
             simulation.alpha(1).restart();
         }
-        
+
         function drag(simulation) {
             function dragstarted(event, d) {
                 if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -170,11 +293,11 @@
                 console.error('Error loading interfaces:', error);
             }
         }
-        
+
         async function startScan() {
             const selectedInterface = document.getElementById('interfaceSelect').value;
             if (!selectedInterface) return alert('Please select a WiFi interface');
-            
+
             await fetch('/api/start_scan', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -183,12 +306,19 @@
             document.getElementById('startBtn').style.display = 'none';
             document.getElementById('stopBtn').style.display = 'block';
         }
-        
+
         async function stopScan() {
             await fetch('/api/stop_scan', { method: 'POST' });
             document.getElementById('startBtn').style.display = 'block';
             document.getElementById('stopBtn').style.display = 'none';
             updateNetwork({access_points:[], clients:[], connections:[]});
+        }
+        
+        function updateSettings() {
+            const ghostMode = document.getElementById('ghostModeToggle').checked;
+            const filterMulticast = document.getElementById('multicastFilterToggle').checked;
+            const persistence = parseInt(document.getElementById('persistenceSlider').value);
+            socket.emit('update_settings', { ghostMode, filterMulticast, persistence });
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -198,6 +328,15 @@
             socket.on('status', data => document.getElementById('status').textContent = data.message);
             document.getElementById('startBtn').addEventListener('click', startScan);
             document.getElementById('stopBtn').addEventListener('click', stopScan);
+            document.getElementById('ghostModeToggle').addEventListener('change', updateSettings);
+            document.getElementById('multicastFilterToggle').addEventListener('change', updateSettings);
+            
+            const persistenceSlider = document.getElementById('persistenceSlider');
+            const persistenceValue = document.getElementById('persistenceValue');
+            persistenceSlider.addEventListener('input', () => {
+                persistenceValue.textContent = persistenceSlider.value;
+            });
+            persistenceSlider.addEventListener('change', updateSettings);
         });
     </script>
 </body>
